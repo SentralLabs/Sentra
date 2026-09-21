@@ -1,21 +1,15 @@
 import type { User } from "./adapter.js";
 
+type Hook<T> = (data: T) => void | Promise<void>;
+
 export interface AuthHooks {
-    beforeLogin?: (
-        user: User
-    ) => Promise<void>;
+    beforeLogin?: Hook<User>;
 
-    afterLogin?: (
-        user: User
-    ) => Promise<void>;
+    afterLogin?: Hook<User>;
 
-    beforeSignUp?: (
-        data: SignUpHookData
-    ) => Promise<void>;
+    beforeSignUp?: Hook<SignUpHookData>;
 
-    afterSignUp?: (
-        user:User
-    ) => Promise<void>;
+    afterSignUp?: Hook<User>;
 
 }
 

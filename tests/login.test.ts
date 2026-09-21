@@ -1,10 +1,12 @@
 import { AuthError, createAuth } from "../src/index.js";
 import { UserRecord, CreateUser } from "../src/types/adapter.js";
 import { RefreshSession } from "../src/types/session.js";
-import { expect, it, describe, vi } from "vitest";
+import { expect, it, describe, vi, afterEach } from "vitest";
 import bcrypt from "bcrypt";
 import { hashRefreshToken } from "../src/jwt/refresh-token.js";
 import { MemoryAdapter } from "../examples/memory-adapter.js";
+
+const secret = "test-secret-that-is-at-least-32-bytes-long";
 
 const pass = bcrypt.hashSync("akash", 10);
 const pass2 = bcrypt.hashSync("rahul", 10);
@@ -100,7 +102,7 @@ const adapter = {
 const auth = createAuth({
     adapter,
     refreshTokenAdapter: adapter,
-    secret: "hello"
+    secret
 });
 
 
@@ -269,7 +271,7 @@ describe("Login", () => {
         const auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 beforeLogin
             }
@@ -306,7 +308,7 @@ describe("Login", () => {
         const auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 beforeLogin
             }
@@ -335,7 +337,7 @@ describe("Login", () => {
         const auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterLogin
             }
@@ -367,7 +369,7 @@ describe("Login", () => {
         const auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterLogin
             }
@@ -400,7 +402,7 @@ describe("Login", () => {
         const auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterLogin
             }
@@ -415,4 +417,124 @@ describe("Login", () => {
         expect(result.token).toBeTypeOf("string");
         expect(result.refreshToken).toBeTypeOf("string");
     });
+});
+describe("Login hardening", () => {
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("should run a bcrypt comparison even when the user does not exist", async () => {
+        const adapter = new MemoryAdapter();
+
+        const auth = createAuth({
+            adapter,
+            refreshTokenAdapter: adapter,
+            secret
+        });
+
+        const compare = vi.spyOn(bcrypt, "compare");
+
+        await expect(
+            auth.login({ email: "nobody@gmail.com", password: "whatever" })
+        ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+
+        expect(compare).toHaveBeenCalledTimes(1);
+        expect(compare.mock.calls[0]![0]).toBe("whatever");
+    });
+
+    it("should normalise the email before lookup", async () => {
+        const adapter = new MemoryAdapter();
+
+        await adapter.createUser({
+            email: "akash@gmail.com",
+            passwordHash: await bcrypt.hash("akash", 10)
+        });
+
+        const auth = createAuth({
+            adapter,
+            refreshTokenAdapter: adapter,
+            secret
+        });
+
+        const result = await auth.login({
+            email: "  Akash@Gmail.com ",
+            password: "akash"
+        });
+
+        expect(result.user.email).toBe("akash@gmail.com");
+    });
+
+    it("should use the email verbatim when normalisation is disabled", async () => {
+        const adapter = new MemoryAdapter();
+
+        await adapter.createUser({
+            email: "Akash@gmail.com",
+            passwordHash: await bcrypt.hash("akash", 10)
+        });
+
+        const auth = createAuth({
+            adapter,
+            refreshTokenAdapter: adapter,
+            secret,
+            normalizeEmail: false
+        });
+
+        await expect(
+            auth.login({ email: "akash@gmail.com", password: "akash" })
+        ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+
+        const result = await auth.login({ email: "Akash@gmail.com", password: "akash" });
+        expect(result.user.email).toBe("Akash@gmail.com");
+    });
+
+    it("should support a custom email normaliser", async () => {
+        const adapter = new MemoryAdapter();
+
+        await adapter.createUser({
+            email: "akash@gmail.com",
+            passwordHash: await bcrypt.hash("akash", 10)
+        });
+
+        const auth = createAuth({
+            adapter,
+            refreshTokenAdapter: adapter,
+            secret,
+            // Strip gmail dots
+            normalizeEmail: email => email.toLowerCase().replace(/\.(?=.*@)/g, "")
+        });
+
+        const result = await auth.login({
+            email: "a.k.a.s.h@gmail.com",
+            password: "akash"
+        });
+
+        expect(result.user.email).toBe("akash@gmail.com");
+    });
+
+    it("should accept synchronous hooks", async () => {
+        const adapter = new MemoryAdapter();
+
+        await adapter.createUser({
+            email: "akash@gmail.com",
+            passwordHash: await bcrypt.hash("akash", 10)
+        });
+
+        const calls: string[] = [];
+
+        const auth = createAuth({
+            adapter,
+            refreshTokenAdapter: adapter,
+            secret,
+            hooks: {
+                beforeLogin: () => { calls.push("before"); },
+                afterLogin: () => { calls.push("after"); }
+            }
+        });
+
+        await auth.login({ email: "akash@gmail.com", password: "akash" });
+
+        expect(calls).toEqual(["before", "after"]);
+    });
+
 });

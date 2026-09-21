@@ -7,7 +7,7 @@ import { createToken } from "../src/jwt/token.js";
 import type { UserRecord, CreateUser } from "../src/types/adapter.js";
 import type { RefreshSession } from "../src/types/session.js";
 
-const secret = "hello";
+const secret = "test-secret-that-is-at-least-32-bytes-long";
 
 const pass = bcrypt.hashSync("akash", 10);
 const pass2 = bcrypt.hashSync("rahul", 10);
@@ -90,7 +90,7 @@ const adapter = {
 const auth = createAuth({
     adapter,
     refreshTokenAdapter: adapter,
-    secret: "hello"
+    secret: "test-secret-that-is-at-least-32-bytes-long"
 });
 
 

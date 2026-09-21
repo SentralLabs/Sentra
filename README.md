@@ -1,4 +1,4 @@
-# Sentra v1.0.0
+# Sentra
 [![npm version](https://img.shields.io/npm/v/@_bisht_akash/sentra.svg)](https://www.npmjs.com/package/@_bisht_akash/sentra)
 [![CI](https://github.com/akashbisht004/Sentra/actions/workflows/ci.yml/badge.svg)](https://github.com/akashbisht004/Sentra/actions/workflows/ci.yml)
 [![npm downloads](https://img.shields.io/npm/dm/@_bisht_akash/sentra.svg)](https://www.npmjs.com/package/@_bisht_akash/sentra)
@@ -154,6 +154,7 @@ export interface RefreshSession {
   refreshTokenHash: string;
   expiresAt: Date;
   revokedAt: Date | null;
+  absoluteExpiresAt?: Date; // only set when `absoluteSessionExpiry` is configured
 }
 
 export interface RefreshTokenAdapter {
@@ -161,8 +162,13 @@ export interface RefreshTokenAdapter {
   createSession(session: RefreshSession): Promise<RefreshSession>;
   revokeSession(sessionId: string): Promise<void>;
   revokeFamily(familyId: string): Promise<void>;
+  // Optional — required only when `refreshTokenGracePeriod` is configured
+  findSessionsByFamilyId?(familyId: string): Promise<RefreshSession[]>;
 }
 ```
+
+> [!TIP]
+> Sentra only adds `absoluteExpiresAt` to a session when `absoluteSessionExpiry` is configured, so existing schemas keep working until you opt in.
 
 ### Concrete Prisma Example
 
@@ -185,7 +191,10 @@ model RefreshSession {
   refreshTokenHash String    @unique
   expiresAt        DateTime
   revokedAt        DateTime?
+  absoluteExpiresAt DateTime? // optional: needed for `absoluteSessionExpiry`
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([familyId])
 }
 ```
 
@@ -246,6 +255,11 @@ export class SentraDbAdapter implements UserAdapter, RefreshTokenAdapter {
       data: { revokedAt: new Date() },
     });
   }
+
+  // Optional: needed for `refreshTokenGracePeriod`
+  async findSessionsByFamilyId(familyId: string): Promise<RefreshSession[]> {
+    return prisma.refreshSession.findMany({ where: { familyId } });
+  }
 }
 ```
 
@@ -277,18 +291,45 @@ If an attacker steals a refresh token and uses it:
 - Sentra automatically calls `revokeFamily(familyId)`, instantly invalidating **every single refresh token** in that family chain.
 - The next time the user or attacker makes an authenticated request with an expired access token, they will be blocked and forced to re-authenticate completely.
 
+### Concurrent Refreshes (Grace Period)
+
+Two clients sharing one refresh token (for example, two browser tabs) can race to refresh it. Without help, the second one would look like a replay and the whole family would be revoked, logging the user out everywhere. Set `refreshTokenGracePeriod` to tolerate this:
+
+```typescript
+const auth = createAuth({
+  // ...
+  refreshTokenGracePeriod: '10s',
+});
+```
+
+Inside the window, presenting an already-rotated token issues a fresh token pair in the same family **as long as the family still has a live session**. A family that was revoked outright (reuse detected, or an explicit `revokeFamily`) stays dead. Outside the window, reuse is treated as a breach as usual. This requires `findSessionsByFamilyId` on your adapter and is disabled by default.
+
+### Absolute Session Lifetime
+
+`refreshTokenExpiry` is a *sliding* window — every refresh pushes it forward — so a session could in principle be kept alive forever. `absoluteSessionExpiry` puts a hard cap on the whole family, measured from login:
+
+```typescript
+const auth = createAuth({
+  // ...
+  refreshTokenExpiry: '30d',       // must refresh at least every 30 days
+  absoluteSessionExpiry: '90d',    // but never later than 90 days after login
+});
+```
+
+When enabled, each session carries an `absoluteExpiresAt` that is copied unchanged across rotations, and `expiresAt` is never set past it.
+
 ---
 
 ## Hooks
 
-You can define optional lifecycle hooks to execute side effects during key events:
+You can define optional lifecycle hooks to execute side effects during key events. Hooks may be synchronous or return a promise:
 
 ```typescript
 export interface AuthHooks {
-  beforeSignUp?: (data: { email: string }) => Promise<void>;
-  afterSignUp?: (user: User) => Promise<void>;
-  beforeLogin?: (user: User) => Promise<void>;
-  afterLogin?: (user: User) => Promise<void>;
+  beforeSignUp?: (data: { email: string }) => void | Promise<void>;
+  afterSignUp?: (user: User) => void | Promise<void>;
+  beforeLogin?: (user: User) => void | Promise<void>;
+  afterLogin?: (user: User) => void | Promise<void>;
 }
 ```
 
@@ -373,10 +414,15 @@ Factory function to create a new `Auth` instance.
 - `config: AuthConfig`
   - `adapter: UserAdapter` (Required) - Database adapter for user operations.
   - `refreshTokenAdapter: RefreshTokenAdapter` (Required) - Database adapter for refresh token sessions.
-  - `secret: string` (Required) - HMAC secret key for signing JWTs.
-  - `tokenExpiry?: string` (Optional) - Expiration duration for access tokens (e.g., `"15m"`, `"1h"`, `"7d"`). Defaults to `"7d"`.
-  - `refreshTokenExpiry?: string` (Optional) - Expiration duration for refresh tokens (e.g., `"30d"`, `"90d"`). Defaults to `"30d"`.
+  - `secret: string` (Required) - HMAC secret key for signing JWTs. Must be at least 32 bytes (e.g. `openssl rand -base64 32`); shorter secrets log a warning.
+  - `tokenExpiry?: string` (Optional) - Lifetime of access tokens. Defaults to `"7d"`.
+  - `refreshTokenExpiry?: string` (Optional) - Sliding lifetime of refresh tokens, renewed on every refresh. Defaults to `"30d"`.
+  - `absoluteSessionExpiry?: string` (Optional) - Hard cap on a login session's total lifetime. Disabled by default. See [Absolute Session Lifetime](#absolute-session-lifetime).
+  - `refreshTokenGracePeriod?: string` (Optional) - Window in which a just-rotated refresh token may be presented again without triggering reuse detection. Disabled by default. See [Concurrent Refreshes](#concurrent-refreshes-grace-period).
+  - `normalizeEmail?: boolean | ((email: string) => string)` (Optional) - How emails are normalised before lookup and storage. `true` (default) trims and lowercases, `false` uses them verbatim, or supply your own function.
   - `hooks?: AuthHooks` (Optional) - Lifecycle hooks object.
+
+All duration options accept `<number><unit>` with an optional space, where the unit is one of `s`, `m`, `h`, `d`, `w` or their long forms (`"15m"`, `"2 hours"`, `"30 days"`). Invalid values throw from `createAuth` so misconfiguration fails at startup.
 
 #### Returns
 
@@ -420,4 +466,13 @@ Validates the refresh token, executes rotation, generates a new token/refresh to
 
 ## Development
 
-Sentra uses GitHub Actions for continuous integration.
+```bash
+git clone https://github.com/akashbisht004/Sentra.git
+cd Sentra
+npm install
+npm test          # run the test suite once
+npm run test:watch
+npm run build     # emit dist/ via tsup
+```
+
+CI runs the test suite and build on every push and pull request to `main`. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines and [SECURITY.md](.github/SECURITY.md) for reporting vulnerabilities.

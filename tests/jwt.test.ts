@@ -3,7 +3,7 @@ import { SignJWT } from "jose";
 import { createToken, verifyToken } from "../src/jwt/token.js";
 import { AuthError } from "../src/errors/auth-error.js";
 
-const secret = "my-super-secret";
+const secret = "test-secret-that-is-at-least-32-bytes-long";
 const userId = "123";
 
 describe("JWT", () => {
