@@ -57,13 +57,13 @@ Install Sentra via npm, yarn, or pnpm:
 
 ```bash
 # npm
-npm install sentra
+npm install @_bisht_akash/sentra
 
 # yarn
-yarn add sentra
+yarn add @_bisht_akash/sentra
 
 # pnpm
-pnpm add sentra
+pnpm add @_bisht_akash/sentra
 ```
 
 ---
@@ -73,7 +73,7 @@ pnpm add sentra
 Initialize Sentra by providing your custom database adapters and configuration secret:
 
 ```typescript
-import { createAuth } from 'sentra';
+import { createAuth } from '@_bisht_akash/sentra';
 import { MyDatabaseAdapter } from './my-database-adapter'; // Custom implementation
 
 // 1. Initialize Auth Engine
@@ -199,7 +199,7 @@ import type {
   UserRecord, 
   CreateUser, 
   RefreshSession 
-} from 'sentra';
+} from '@_bisht_akash/sentra';
 
 const prisma = new PrismaClient();
 
@@ -338,7 +338,7 @@ Sentra throws a custom `AuthError` containing a descriptive error message and an
 ### Example Error Handling
 
 ```typescript
-import { AuthError } from 'sentra';
+import { AuthError } from '@_bisht_akash/sentra';
 
 try {
   const result = await auth.login({ email, password });
