@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import bcrypt from "bcrypt";
 import { MemoryAdapter } from "../examples/memory-adapter.js";
 
+const secret = "test-secret-that-is-at-least-32-bytes-long";
+
 describe("Signup", () => {
     let adapter: MemoryAdapter;
     let auth: ReturnType<typeof createAuth>;
@@ -13,7 +15,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "hello"
+            secret
         });
     });
 
@@ -136,7 +138,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 beforeSignUp
             }
@@ -167,7 +169,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 beforeSignUp
             }
@@ -193,7 +195,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterSignUp
             }
@@ -214,7 +216,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterSignUp
             }
@@ -239,7 +241,7 @@ describe("Signup", () => {
         auth = createAuth({
             adapter,
             refreshTokenAdapter: adapter,
-            secret: "my-secret",
+            secret,
             hooks: {
                 afterSignUp
             }
@@ -255,4 +257,47 @@ describe("Signup", () => {
 
         expect(adapter.getUsers()).toHaveLength(1);
     });
+});
+describe("Signup email normalisation", () => {
+
+    it("should store a trimmed, lowercased email", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret });
+
+        const user = await auth.signUp({ email: "  Akash@Gmail.com ", password: "akash" });
+
+        expect(user.email).toBe("akash@gmail.com");
+        expect(adapter.getUsers()[0]!.email).toBe("akash@gmail.com");
+    });
+
+    it("should treat emails differing only by case as the same account", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret });
+
+        await auth.signUp({ email: "akash@gmail.com", password: "akash" });
+
+        await expect(
+            auth.signUp({ email: "AKASH@gmail.com", password: "akash" })
+        ).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
+    });
+
+    it("should pass the normalised email to beforeSignUp", async () => {
+        const adapter = new MemoryAdapter();
+        const beforeSignUp = vi.fn();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret, hooks: { beforeSignUp } });
+
+        await auth.signUp({ email: " Akash@Gmail.com", password: "akash" });
+
+        expect(beforeSignUp).toHaveBeenCalledWith({ email: "akash@gmail.com" });
+    });
+
+    it("should keep the email verbatim when normalisation is disabled", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret, normalizeEmail: false });
+
+        const user = await auth.signUp({ email: "Akash@Gmail.com", password: "akash" });
+
+        expect(user.email).toBe("Akash@Gmail.com");
+    });
+
 });

@@ -1,10 +1,35 @@
 {
   "name": "@_bisht_akash/sentra",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Authentication and authorization framework for TypeScript applications",
+  "author": "Akash Bisht",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akashbisht004/Sentra.git"
+  },
+  "homepage": "https://github.com/akashbisht004/Sentra#readme",
+  "bugs": {
+    "url": "https://github.com/akashbisht004/Sentra/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsup",
@@ -19,7 +44,10 @@
     "typescript",
     "auth"
   ],
-  "author": "",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "jose": "^6.2.9"
+  },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "tsup": "^8.5.1",
@@ -27,22 +55,6 @@
     "typescript": "^5.7.3",
     "vitest": "^4.1.10"
   },
-  "dependencies": {
-    "bcrypt": "^6.0.0",
-    "jose": "^6.2.9"
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "license": "ISC",
   "publishConfig": {
     "access": "public"
   }

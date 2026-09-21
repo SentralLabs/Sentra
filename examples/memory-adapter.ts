@@ -52,4 +52,8 @@ export class MemoryAdapter implements UserAdapter, RefreshTokenAdapter {
         });
     }
 
+    async findSessionsByFamilyId(familyId: string): Promise<RefreshSession[]> {
+        return this.sessions.filter(session => session.familyId === familyId);
+    }
+
 }

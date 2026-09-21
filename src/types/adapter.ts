@@ -23,4 +23,9 @@ export interface RefreshTokenAdapter {
     revokeSession(sessionId: string): Promise<void>;
     createSession(session: RefreshSession): Promise<RefreshSession>;
     revokeFamily(familyId: string): Promise<void>;
+    /**
+     * Required when `refreshTokenGracePeriod` is configured. Used to confirm
+     * that a family is still healthy before tolerating a concurrent refresh.
+     */
+    findSessionsByFamilyId?(familyId: string): Promise<RefreshSession[]>;
 }

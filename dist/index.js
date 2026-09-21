@@ -19,11 +19,55 @@ function hashRefreshToken(token) {
 
 // src/jwt/token.ts
 import { SignJWT, jwtVerify } from "jose";
+
+// src/utils/duration.ts
+var UNIT_MS = {
+  s: 1e3,
+  sec: 1e3,
+  secs: 1e3,
+  second: 1e3,
+  seconds: 1e3,
+  m: 6e4,
+  min: 6e4,
+  mins: 6e4,
+  minute: 6e4,
+  minutes: 6e4,
+  h: 36e5,
+  hr: 36e5,
+  hrs: 36e5,
+  hour: 36e5,
+  hours: 36e5,
+  d: 864e5,
+  day: 864e5,
+  days: 864e5,
+  w: 6048e5,
+  week: 6048e5,
+  weeks: 6048e5
+};
+function parseDuration(duration) {
+  if (typeof duration !== "string") {
+    throw new Error(`Invalid duration: ${String(duration)}`);
+  }
+  const match = duration.trim().match(/^(\d+)\s*([a-z]+)$/i);
+  if (!match) {
+    throw new Error(`Invalid duration: "${duration}"`);
+  }
+  const value = Number(match[1]);
+  const unit = UNIT_MS[match[2].toLowerCase()];
+  if (unit === void 0) {
+    throw new Error(`Invalid duration unit in "${duration}"`);
+  }
+  return value * unit;
+}
+
+// src/jwt/token.ts
 async function createToken(userId, secret, tokenExpiry) {
   const key = new TextEncoder().encode(secret);
+  const now = Math.floor(Date.now() / 1e3);
+  const expiresIn = Math.floor(parseDuration(tokenExpiry) / 1e3);
   const jwt = new SignJWT({ sub: userId });
-  jwt.setExpirationTime(tokenExpiry);
-  jwt.setIssuedAt();
+  jwt.setIssuedAt(now);
+  jwt.setExpirationTime(now + expiresIn);
   jwt.setProtectedHeader({ alg: "HS256" });
   const token = await jwt.sign(key);
   return token;
@@ -46,51 +90,41 @@ async function verifyToken(token, secret) {
 // src/core/auth.ts
 import bcrypt from "bcrypt";
 import { randomBytes as randomBytes2 } from "crypto";
-
-// src/utils/duration.ts
-function durationToDate(duration) {
-  const match = duration.match(/^(\d+)([dhm])$/i);
-  if (!match) {
-    throw new Error("Invalid duration");
-  }
-  const value = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  const multipliers = {
-    d: 24 * 60 * 60 * 1e3,
-    h: 60 * 60 * 1e3,
-    m: 60 * 1e3
-  };
-  const milliseconds = value * multipliers[unit];
-  return new Date(Date.now() + milliseconds);
-}
-
-// src/core/auth.ts
+var BCRYPT_COST = 10;
 var Auth = class {
   adapter;
   secret;
   expiry;
   refreshTokenAdapter;
-  refreshTokenExpiry;
+  refreshTokenExpiryMs;
+  absoluteSessionExpiryMs;
+  refreshTokenGracePeriodMs;
+  emailNormalizer;
   hooks;
-  constructor(adapter, refreshTokenAdapter, secret, expiry, refreshTokenExpiry, hooks) {
-    this.adapter = adapter;
-    this.secret = secret;
-    this.expiry = expiry;
-    this.refreshTokenAdapter = refreshTokenAdapter;
-    this.refreshTokenExpiry = refreshTokenExpiry;
-    this.hooks = hooks;
+  dummyHash;
+  constructor(options) {
+    this.adapter = options.adapter;
+    this.secret = options.secret;
+    this.expiry = options.tokenExpiry;
+    this.refreshTokenAdapter = options.refreshTokenAdapter;
+    this.refreshTokenExpiryMs = options.refreshTokenExpiryMs;
+    this.absoluteSessionExpiryMs = options.absoluteSessionExpiryMs;
+    this.refreshTokenGracePeriodMs = options.refreshTokenGracePeriodMs;
+    this.emailNormalizer = options.normalizeEmail;
+    this.hooks = options.hooks;
   }
   async signUp(data) {
+    const email = this.normalizeEmail(data.email);
     if (this.hooks?.beforeSignUp) {
-      await this.hooks.beforeSignUp({ email: data.email });
+      await this.hooks.beforeSignUp({ email });
     }
-    const user = await this.adapter.findUserByEmail(data.email);
+    const user = await this.adapter.findUserByEmail(email);
     if (user != null) {
       throw new AuthError("User already exists with same mail", "USER_ALREADY_EXISTS");
     }
-    const passwordHash = await bcrypt.hash(data.password, 10);
+    const passwordHash = await bcrypt.hash(data.password, BCRYPT_COST);
     const newUser = await this.adapter.createUser({
-      email: data.email,
+      email,
       passwordHash
     });
     const result = {
@@ -107,24 +141,19 @@ var Auth = class {
     return result;
   }
   async login(data) {
-    const user = await this.adapter.findUserByEmail(data.email);
-    if (user == null) throw new AuthError("Invalid credentials", "INVALID_CREDENTIALS");
+    const email = this.normalizeEmail(data.email);
+    const user = await this.adapter.findUserByEmail(email);
+    if (user == null) {
+      await bcrypt.compare(data.password, await this.getDummyHash());
+      throw new AuthError("Invalid credentials", "INVALID_CREDENTIALS");
+    }
     if (this.hooks?.beforeLogin) await this.hooks.beforeLogin({ id: user.id, email: user.email });
     const valid = await bcrypt.compare(data.password, user.passwordHash);
     if (!valid) throw new AuthError("Invalid credentials", "INVALID_CREDENTIALS");
-    const refreshToken = generateRefreshToken();
-    const refreshTokenHash = hashRefreshToken(refreshToken);
-    const sessionId = randomBytes2(16).toString("hex");
+    const now = Date.now();
     const familyId = randomBytes2(16).toString("hex");
-    const refreshSession = {
-      sessionId,
-      familyId,
-      userId: user.id,
-      refreshTokenHash,
-      expiresAt: durationToDate(this.refreshTokenExpiry),
-      revokedAt: null
-    };
-    await this.refreshTokenAdapter.createSession(refreshSession);
+    const absoluteExpiresAt = this.absoluteSessionExpiryMs === null ? void 0 : new Date(now + this.absoluteSessionExpiryMs);
+    const refreshToken = await this.issueSession(user.id, familyId, absoluteExpiresAt, now);
     const token = await createToken(user.id, this.secret, this.expiry);
     const result = {
       user: {
@@ -158,35 +187,33 @@ var Auth = class {
     if (session == null) {
       throw new AuthError("Invalid refresh token", "AUTHENTICATION_FAILED");
     }
+    const now = Date.now();
     if (session.revokedAt !== null) {
-      await this.refreshTokenAdapter.revokeFamily(
-        session.familyId
-      );
-      throw new AuthError(
-        "Refresh token reuse detected",
-        "AUTHENTICATION_FAILED"
-      );
+      const concurrent = await this.isConcurrentRefresh(session, now);
+      if (!concurrent) {
+        await this.refreshTokenAdapter.revokeFamily(
+          session.familyId
+        );
+        throw new AuthError(
+          "Refresh token reuse detected",
+          "AUTHENTICATION_FAILED"
+        );
+      }
     }
-    if (session.expiresAt.getTime() <= Date.now()) {
-      throw new AuthError("Refresh token has been expired", "AUTHENTICATION_FAILED");
+    if (session.expiresAt.getTime() <= now) {
+      throw new AuthError("Refresh token has expired", "AUTHENTICATION_FAILED");
+    }
+    if (session.absoluteExpiresAt !== void 0 && session.absoluteExpiresAt.getTime() <= now) {
+      throw new AuthError("Session has reached its maximum lifetime", "AUTHENTICATION_FAILED");
     }
     const user = await this.adapter.findUserById(session.userId);
     if (user == null) {
       throw new AuthError("User no longer exists", "AUTHENTICATION_FAILED");
     }
-    const newRefreshToken = generateRefreshToken();
-    const newRefreshTokenHash = hashRefreshToken(newRefreshToken);
-    const newSessionId = randomBytes2(16).toString("hex");
-    const newSession = {
-      sessionId: newSessionId,
-      familyId: session.familyId,
-      userId: user.id,
-      refreshTokenHash: newRefreshTokenHash,
-      expiresAt: durationToDate(this.refreshTokenExpiry),
-      revokedAt: null
-    };
-    await this.refreshTokenAdapter.revokeSession(session.sessionId);
-    await this.refreshTokenAdapter.createSession(newSession);
+    if (session.revokedAt === null) {
+      await this.refreshTokenAdapter.revokeSession(session.sessionId);
+    }
+    const newRefreshToken = await this.issueSession(user.id, session.familyId, session.absoluteExpiresAt, now);
     const token = await createToken(
       user.id,
       this.secret,
@@ -201,12 +228,92 @@ var Auth = class {
       refreshToken: newRefreshToken
     };
   }
+  /**
+   * Creates and stores a new refresh session in `familyId` and returns the
+   * raw refresh token. `expiresAt` is capped by `absoluteExpiresAt`.
+   */
+  async issueSession(userId, familyId, absoluteExpiresAt, now) {
+    const refreshToken = generateRefreshToken();
+    let expiresAt = new Date(now + this.refreshTokenExpiryMs);
+    if (absoluteExpiresAt !== void 0 && absoluteExpiresAt.getTime() < expiresAt.getTime()) {
+      expiresAt = absoluteExpiresAt;
+    }
+    const session = {
+      sessionId: randomBytes2(16).toString("hex"),
+      familyId,
+      userId,
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt,
+      revokedAt: null
+    };
+    if (absoluteExpiresAt !== void 0) {
+      session.absoluteExpiresAt = absoluteExpiresAt;
+    }
+    await this.refreshTokenAdapter.createSession(session);
+    return refreshToken;
+  }
+  /**
+   * A revoked session presented within the grace period counts as a
+   * concurrent refresh (two clients racing with the same token) rather
+   * than reuse, but only while the family still has a live session. A
+   * family that was revoked outright has none, so its tokens stay dead.
+   */
+  async isConcurrentRefresh(session, now) {
+    if (this.refreshTokenGracePeriodMs === 0 || session.revokedAt === null) return false;
+    if (now - session.revokedAt.getTime() > this.refreshTokenGracePeriodMs) return false;
+    const family = await this.refreshTokenAdapter.findSessionsByFamilyId(session.familyId);
+    return family.some(
+      (member) => member.revokedAt === null && member.expiresAt.getTime() > now
+    );
+  }
+  normalizeEmail(email) {
+    if (this.emailNormalizer === false) return email;
+    if (typeof this.emailNormalizer === "function") return this.emailNormalizer(email);
+    return email.trim().toLowerCase();
+  }
+  async getDummyHash() {
+    this.dummyHash ??= await bcrypt.hash("sentra-dummy-password", BCRYPT_COST);
+    return this.dummyHash;
+  }
 };
 
 // src/index.ts
+var MIN_SECRET_BYTES = 32;
+function parseDurationOption(name, value) {
+  try {
+    return parseDuration(value);
+  } catch (error) {
+    throw new Error(`Sentra: invalid ${name} "${value}": ${error.message}`);
+  }
+}
 function createAuth(config) {
-  let auth = new Auth(config.adapter, config.refreshTokenAdapter, config.secret, config.tokenExpiry ?? "7d", config.refreshTokenExpiry ?? "30d", config.hooks);
-  return auth;
+  if (typeof config.secret !== "string" || config.secret.length === 0) {
+    throw new Error("Sentra: secret must be a non-empty string");
+  }
+  if (Buffer.byteLength(config.secret, "utf8") < MIN_SECRET_BYTES) {
+    console.warn(
+      `Sentra: secret is shorter than ${MIN_SECRET_BYTES} bytes. HS256 keys should be at least 256 bits; generate one with \`openssl rand -base64 32\`.`
+    );
+  }
+  const tokenExpiry = config.tokenExpiry ?? "7d";
+  parseDurationOption("tokenExpiry", tokenExpiry);
+  const refreshTokenExpiryMs = parseDurationOption("refreshTokenExpiry", config.refreshTokenExpiry ?? "30d");
+  const absoluteSessionExpiryMs = config.absoluteSessionExpiry === void 0 ? null : parseDurationOption("absoluteSessionExpiry", config.absoluteSessionExpiry);
+  const refreshTokenGracePeriodMs = config.refreshTokenGracePeriod === void 0 ? 0 : parseDurationOption("refreshTokenGracePeriod", config.refreshTokenGracePeriod);
+  if (refreshTokenGracePeriodMs > 0 && typeof config.refreshTokenAdapter.findSessionsByFamilyId !== "function") {
+    throw new Error("Sentra: refreshTokenGracePeriod requires refreshTokenAdapter.findSessionsByFamilyId");
+  }
+  return new Auth({
+    adapter: config.adapter,
+    refreshTokenAdapter: config.refreshTokenAdapter,
+    secret: config.secret,
+    tokenExpiry,
+    refreshTokenExpiryMs,
+    absoluteSessionExpiryMs,
+    refreshTokenGracePeriodMs,
+    normalizeEmail: config.normalizeEmail ?? true,
+    hooks: config.hooks
+  });
 }
 export {
   AuthError,

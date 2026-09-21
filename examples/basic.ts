@@ -6,7 +6,7 @@ const adapter = new MemoryAdapter();
 const auth = createAuth({
     adapter,
     refreshTokenAdapter: adapter,
-    secret: "my-secret"
+    secret: process.env.JWT_SECRET ?? "dev-only-secret-change-me-in-production!"
 });
 // signup
 const res = await auth.signUp({
