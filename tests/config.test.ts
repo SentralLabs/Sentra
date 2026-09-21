@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createAuth } from "../src/index.js";
-import { MemoryAdapter } from "../examples/memory-adapter.js";
+import { MemoryAdapter } from "../src/adapters/memory.js";
 
 const secret = "test-secret-that-is-at-least-32-bytes-long";
 

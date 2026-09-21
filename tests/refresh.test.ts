@@ -1,5 +1,5 @@
 import { createAuth, AuthError } from "../src/index.js";
-import { MemoryAdapter } from "../examples/memory-adapter.js";
+import { MemoryAdapter } from "../src/adapters/memory.js";
 import { describe, it, expect } from "vitest";
 import bcrypt from "bcrypt";
 
@@ -84,7 +84,7 @@ describe("Refresh", () => {
 
         const sessions = adapter.getSessions();
 
-        const session = sessions[0];
+        const session = sessions[0]!;
 
         await adapter.revokeSession(session.sessionId);
 
@@ -119,7 +119,7 @@ describe("Refresh", () => {
 
         const sessions = adapter.getSessions();
 
-        sessions[0].expiresAt = new Date(Date.now() - 1000);
+        sessions[0]!.expiresAt = new Date(Date.now() - 1000);
 
         try {
             await auth.refresh(loginResult.refreshToken);
@@ -254,7 +254,7 @@ describe("Refresh", () => {
             password: "akash"
         });
 
-        const firstSession = adapter.getSessions()[0];
+        const firstSession = adapter.getSessions()[0]!;
 
         const refreshResult = await auth.refresh(
             loginResult.refreshToken
@@ -522,6 +522,65 @@ describe("Absolute session expiry", () => {
         await expect(
             auth.refresh(login.refreshToken)
         ).rejects.toMatchObject({ code: "AUTHENTICATION_FAILED" });
+    });
+
+});
+
+describe("Refresh error reasons", () => {
+
+    it("should report REFRESH_TOKEN_INVALID for an unknown token", async () => {
+        const { auth } = await loggedInAuth();
+
+        await expect(auth.refresh("nope")).rejects.toMatchObject({
+            code: "AUTHENTICATION_FAILED",
+            reason: "REFRESH_TOKEN_INVALID"
+        });
+    });
+
+    it("should report REFRESH_TOKEN_EXPIRED for an expired token", async () => {
+        const { adapter, auth, login } = await loggedInAuth();
+
+        adapter.getSessions()[0]!.expiresAt = new Date(Date.now() - 1000);
+
+        await expect(auth.refresh(login.refreshToken)).rejects.toMatchObject({
+            reason: "REFRESH_TOKEN_EXPIRED"
+        });
+    });
+
+    it("should report SESSION_EXPIRED when the absolute lifetime has passed", async () => {
+        const { adapter, auth, login } = await loggedInAuth({ absoluteSessionExpiry: "90d" });
+
+        adapter.getSessions()[0]!.absoluteExpiresAt = new Date(Date.now() - 1000);
+
+        await expect(auth.refresh(login.refreshToken)).rejects.toMatchObject({
+            reason: "SESSION_EXPIRED"
+        });
+    });
+
+    it("should report REFRESH_TOKEN_REUSED on replay", async () => {
+        const { auth, login } = await loggedInAuth();
+
+        await auth.refresh(login.refreshToken);
+
+        await expect(auth.refresh(login.refreshToken)).rejects.toMatchObject({
+            reason: "REFRESH_TOKEN_REUSED"
+        });
+    });
+
+    it("should report USER_NOT_FOUND when the user was deleted", async () => {
+        const { adapter, auth, login } = await loggedInAuth();
+
+        adapter.deleteUser(login.user.id);
+
+        await expect(auth.refresh(login.refreshToken)).rejects.toMatchObject({
+            reason: "USER_NOT_FOUND"
+        });
+    });
+
+    it("should reject an empty refresh token as invalid input", async () => {
+        const { auth } = await loggedInAuth();
+
+        await expect(auth.refresh("")).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
 
 });

@@ -1,7 +1,7 @@
 import { createAuth, AuthError } from "../src/index.js";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import bcrypt from "bcrypt";
-import { MemoryAdapter } from "../examples/memory-adapter.js";
+import { MemoryAdapter } from "../src/adapters/memory.js";
 
 const secret = "test-secret-that-is-at-least-32-bytes-long";
 
@@ -44,7 +44,7 @@ describe("Signup", () => {
             password: "333"
         });
 
-        expect(adapter.getUsers()[0].email).toBe("akash@gmail.com");
+        expect(adapter.getUsers()[0]!.email).toBe("akash@gmail.com");
     });
 
     it("should hash the password", async () => {
@@ -53,7 +53,7 @@ describe("Signup", () => {
             password: "333"
         });
 
-        expect(adapter.getUsers()[0].passwordHash).not.toBe("333");
+        expect(adapter.getUsers()[0]!.passwordHash).not.toBe("333");
     });
 
     it("should create a valid bcrypt password hash", async () => {
@@ -64,7 +64,7 @@ describe("Signup", () => {
 
         const isValid = await bcrypt.compare(
             "333",
-            adapter.getUsers()[0].passwordHash
+            adapter.getUsers()[0]!.passwordHash
         );
 
         expect(isValid).toBe(true);
@@ -227,7 +227,7 @@ describe("Signup", () => {
             password: "akash"
         });
 
-        const hookUser = afterSignUp.mock.calls[0][0];
+        const hookUser = afterSignUp.mock.calls[0]![0];
 
         expect(hookUser).not.toHaveProperty("password");
         expect(hookUser).not.toHaveProperty("passwordHash");
@@ -298,6 +298,39 @@ describe("Signup email normalisation", () => {
         const user = await auth.signUp({ email: "Akash@Gmail.com", password: "akash" });
 
         expect(user.email).toBe("Akash@Gmail.com");
+    });
+
+});
+
+describe("Signup input validation", () => {
+
+    it("should reject an empty email", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret });
+
+        await expect(
+            auth.signUp({ email: "", password: "akash" })
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("should reject an empty password", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret });
+
+        await expect(
+            auth.signUp({ email: "akash@gmail.com", password: "" })
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+        expect(adapter.getUsers()).toHaveLength(0);
+    });
+
+    it("should reject non-string input", async () => {
+        const adapter = new MemoryAdapter();
+        const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret });
+
+        await expect(
+            auth.signUp({ email: "akash@gmail.com", password: 123 as unknown as string })
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     });
 
 });

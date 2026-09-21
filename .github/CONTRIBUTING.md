@@ -7,7 +7,7 @@ Thanks for your interest in contributing to Sentra.
 Fork the repository and clone your fork:
 
 ```bash
-git clone https://github.com/akashbisht004/Sentra.git
+git clone https://github.com/SentralLabs/Sentra.git
 cd Sentra
 ```
 

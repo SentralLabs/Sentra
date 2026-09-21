@@ -1,5 +1,12 @@
 import type { User, UserAdapter,RefreshTokenAdapter } from "./adapter.js";
 import type { AuthHooks } from "./hooks.js";
+import type { PasswordHasher } from "../password/hasher.js";
+import type { JwtOptions } from "../jwt/token.js";
+
+export interface Logger {
+    warn(message: string, ...args: unknown[]): void;
+    error(message: string, ...args: unknown[]): void;
+}
 
 export interface AuthConfig{
     adapter: UserAdapter;
@@ -27,6 +34,14 @@ export interface AuthConfig{
      * supplies custom normalisation.
      */
     normalizeEmail?: boolean | ((email: string) => string);
+    /** `iss` / `aud` claims to set on access tokens and require when verifying. */
+    jwt?: JwtOptions;
+    /** bcrypt work factor for the default hasher. Defaults to 10. Ignored when `passwordHasher` is set. */
+    bcryptCost?: number;
+    /** Replace bcrypt with your own hashing implementation. */
+    passwordHasher?: PasswordHasher;
+    /** Where hook failures and configuration warnings go. Defaults to `console`. */
+    logger?: Logger;
     hooks?: AuthHooks;
 }
 
@@ -39,6 +54,11 @@ export interface LoginData{
     email: string;
     password: string;
 }  
+
+export interface ChangePasswordData {
+    currentPassword: string;
+    newPassword: string;
+}
 
 export interface AuthResult{
     user: User;

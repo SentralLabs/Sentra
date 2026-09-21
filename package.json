@@ -1,24 +1,31 @@
 {
   "name": "@_bisht_akash/sentra",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Authentication and authorization framework for TypeScript applications",
   "author": "Akash Bisht",
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/akashbisht004/Sentra.git"
+    "url": "git+https://github.com/SentralLabs/Sentra.git"
   },
-  "homepage": "https://github.com/akashbisht004/Sentra#readme",
+  "homepage": "https://github.com/SentralLabs/Sentra#readme",
   "bugs": {
-    "url": "https://github.com/akashbisht004/Sentra/issues"
+    "url": "https://github.com/SentralLabs/Sentra/issues"
   },
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
@@ -33,9 +40,10 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsup",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run test && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "keywords": [
     "authentication",
