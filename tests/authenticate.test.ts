@@ -81,6 +81,14 @@ const adapter = {
         return Promise.resolve();
     },
 
+    revokeFamily(familyId: string): Promise<void> {
+        for (const session of this.sessions) {
+            if (session.familyId === familyId) session.revokedAt = new Date();
+        }
+
+        return Promise.resolve();
+    },
+
     getSessions(): RefreshSession[] {
         return this.sessions;
     }

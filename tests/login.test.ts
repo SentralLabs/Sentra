@@ -4,7 +4,7 @@ import { RefreshSession } from "../src/types/session.js";
 import { expect, it, describe, vi, afterEach } from "vitest";
 import bcrypt from "bcrypt";
 import { hashRefreshToken } from "../src/jwt/refresh-token.js";
-import { MemoryAdapter } from "../examples/memory-adapter.js";
+import { MemoryAdapter } from "../src/adapters/memory.js";
 
 const secret = "test-secret-that-is-at-least-32-bytes-long";
 
@@ -199,7 +199,7 @@ describe("Login", () => {
         });
 
         const sessions = adapter.getSessions();
-        const session = sessions[sessions.length - 1];
+        const session = sessions[sessions.length - 1]!;
 
         expect(session.userId).toBe(result.user.id);
     });
@@ -212,7 +212,7 @@ describe("Login", () => {
         });
 
         const sessions = adapter.getSessions();
-        const session = sessions[sessions.length - 1];
+        const session = sessions[sessions.length - 1]!;
 
         expect(session.refreshTokenHash)
             .not.toBe(result.refreshToken);
@@ -226,7 +226,7 @@ describe("Login", () => {
         });
 
         const sessions = adapter.getSessions();
-        const session = sessions[sessions.length - 1];
+        const session = sessions[sessions.length - 1]!;
 
         expect(session.refreshTokenHash).toBe(hashRefreshToken(result.refreshToken));
     });
@@ -239,7 +239,7 @@ describe("Login", () => {
         });
 
         const sessions = adapter.getSessions();
-        const session = sessions[sessions.length - 1];
+        const session = sessions[sessions.length - 1]!;
 
         expect(session.revokedAt).toBeNull();
     });
@@ -252,7 +252,7 @@ describe("Login", () => {
         });
 
         const sessions = adapter.getSessions();
-        const session = sessions[sessions.length - 1];
+        const session = sessions[sessions.length - 1]!;
 
         expect(session.expiresAt.getTime())
             .toBeGreaterThan(Date.now());
@@ -351,7 +351,7 @@ describe("Login", () => {
         expect(afterLogin).toHaveBeenCalledOnce();
 
         expect(afterLogin).toHaveBeenCalledWith(result.user);
-        const hookUser = afterLogin.mock.calls[0][0];
+        const hookUser = afterLogin.mock.calls[0]![0];
 
         expect(hookUser).not.toHaveProperty("passwordHash");
     });

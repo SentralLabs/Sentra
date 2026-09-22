@@ -1,8 +1,8 @@
 # Sentra
 [![npm version](https://img.shields.io/npm/v/@_bisht_akash/sentra.svg)](https://www.npmjs.com/package/@_bisht_akash/sentra)
-[![CI](https://github.com/akashbisht004/Sentra/actions/workflows/ci.yml/badge.svg)](https://github.com/akashbisht004/Sentra/actions/workflows/ci.yml)
+[![CI](https://github.com/SentralLabs/Sentra/actions/workflows/ci.yml/badge.svg)](https://github.com/SentralLabs/Sentra/actions/workflows/ci.yml)
 [![npm downloads](https://img.shields.io/npm/dm/@_bisht_akash/sentra.svg)](https://www.npmjs.com/package/@_bisht_akash/sentra)
-[![License](https://img.shields.io/npm/l/@_bisht_akash/sentra.svg)](https://github.com/akashbisht004/Sentra/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/@_bisht_akash/sentra.svg)](https://github.com/SentralLabs/Sentra/blob/main/LICENSE)
 
 Sentra is a lightweight, database-agnostic authentication and authorization mechanics engine for TypeScript and JavaScript applications. Sentra handles secure password hashing, JWT creation and validation, and advanced refresh token rotation (RTR) with automatic reuse detection—allowing you to focus purely on your application's business rules.
 
@@ -45,9 +45,11 @@ Password Hashing   JWT Token Mgmt     Session & Token Rotation
   - [Automatic Reuse Detection](#automatic-reuse-detection)
 - [Hooks](#hooks)
 - [Errors](#errors)
+- [Password Hashing](#password-hashing)
 - [API Reference](#api-reference)
   - [createAuth](#createauth)
   - [Auth Class](#auth-class)
+- [Development](#development)
 
 ---
 
@@ -108,6 +110,18 @@ const authenticatedUser = await auth.authenticate(token);
 // 5. Refresh Tokens
 const tokens = await auth.refresh(refreshToken);
 // Returns a new access token and a rotated refresh token
+
+// 6. Log Out
+await auth.logout(tokens.refreshToken);
+```
+
+Sentra ships as both ESM and CommonJS. For prototypes and tests, the built-in `MemoryAdapter` implements every adapter method without a database:
+
+```typescript
+import { createAuth, MemoryAdapter } from '@_bisht_akash/sentra';
+
+const adapter = new MemoryAdapter();
+const auth = createAuth({ adapter, refreshTokenAdapter: adapter, secret: process.env.JWT_SECRET! });
 ```
 
 ---
@@ -139,6 +153,8 @@ export interface UserAdapter {
   findUserByEmail(email: string): Promise<UserRecord | null>;
   findUserById(userId: string): Promise<UserRecord | null>;
   createUser(data: CreateUser): Promise<UserRecord>;
+  // Optional — required for `auth.changePassword()`
+  updatePassword?(userId: string, passwordHash: string): Promise<void>;
 }
 ```
 
@@ -164,6 +180,8 @@ export interface RefreshTokenAdapter {
   revokeFamily(familyId: string): Promise<void>;
   // Optional — required only when `refreshTokenGracePeriod` is configured
   findSessionsByFamilyId?(familyId: string): Promise<RefreshSession[]>;
+  // Optional — required for `auth.logoutAll()`; used by `auth.changePassword()` when present
+  revokeUserSessions?(userId: string): Promise<void>;
 }
 ```
 
@@ -232,6 +250,11 @@ export class SentraDbAdapter implements UserAdapter, RefreshTokenAdapter {
     });
   }
 
+  // Optional: needed for `auth.changePassword()`
+  async updatePassword(userId: string, passwordHash: string): Promise<void> {
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  }
+
   // --- RefreshTokenAdapter Implementation ---
 
   async findSessionByTokenHash(refreshTokenHash: string): Promise<RefreshSession | null> {
@@ -259,6 +282,14 @@ export class SentraDbAdapter implements UserAdapter, RefreshTokenAdapter {
   // Optional: needed for `refreshTokenGracePeriod`
   async findSessionsByFamilyId(familyId: string): Promise<RefreshSession[]> {
     return prisma.refreshSession.findMany({ where: { familyId } });
+  }
+
+  // Optional: needed for `auth.logoutAll()`
+  async revokeUserSessions(userId: string): Promise<void> {
+    await prisma.refreshSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 }
 ```
@@ -328,10 +359,20 @@ You can define optional lifecycle hooks to execute side effects during key event
 export interface AuthHooks {
   beforeSignUp?: (data: { email: string }) => void | Promise<void>;
   afterSignUp?: (user: User) => void | Promise<void>;
+
   beforeLogin?: (user: User) => void | Promise<void>;
   afterLogin?: (user: User) => void | Promise<void>;
+  onLoginFailed?: (data: { email: string; reason: 'USER_NOT_FOUND' | 'INVALID_PASSWORD' }) => void | Promise<void>;
+
+  beforeRefresh?: (user: User) => void | Promise<void>;
+  afterRefresh?: (user: User) => void | Promise<void>;
+  onReuseDetected?: (data: { userId: string; familyId: string; sessionId: string }) => void | Promise<void>;
+
+  afterPasswordChange?: (user: User) => void | Promise<void>;
 }
 ```
+
+`before*` hooks run before the operation and abort it by throwing. `after*` and `on*` hooks are for side effects: if they throw, the error is passed to the configured `logger` and the operation's result is still returned.
 
 ### Example Usage
 
@@ -356,13 +397,19 @@ const auth = createAuth({
     },
     afterLogin: async (user) => {
       await logAuditActivity(user.id, 'user_login_success');
+    },
+    onLoginFailed: async ({ email, reason }) => {
+      // Feed a rate limiter or lockout counter
+      await recordFailedAttempt(email, reason);
+    },
+    onReuseDetected: async ({ userId, familyId }) => {
+      // Someone presented a refresh token that had already been rotated;
+      // the whole family is revoked by the time this runs.
+      await alertSecurityTeam({ userId, familyId });
     }
   }
 });
 ```
-
-> [!NOTE]
-> Errors thrown inside `beforeSignUp` and `beforeLogin` hooks will abort the operation. If hooks like `afterSignUp` or `afterLogin` throw, they are caught and logged automatically to prevent breaking the core user response flow.
 
 ---
 
@@ -373,8 +420,24 @@ Sentra throws a custom `AuthError` containing a descriptive error message and an
 ### Error Codes
 
 - `USER_ALREADY_EXISTS`: Thrown during signup if a user record with the same email already exists.
-- `INVALID_CREDENTIALS`: Thrown during login if the email is not found or the password comparison fails.
+- `USER_NOT_FOUND`: Thrown by `changePassword` when the user id does not exist.
+- `INVALID_CREDENTIALS`: Thrown during login or `changePassword` if the email is not found or the password comparison fails. Deliberately does not say which.
+- `INVALID_INPUT`: Thrown when a required string (email, password, token, user id) is missing or empty.
 - `AUTHENTICATION_FAILED`: Thrown during token validation or refresh flow (e.g. invalid tokens, expired tokens, or token reuse detection).
+
+### Error Reasons
+
+`AUTHENTICATION_FAILED` errors also carry a `reason` so you can distinguish a token that simply expired (ask the client to refresh) from one that was tampered with or replayed (log the client out):
+
+| `reason` | Meaning |
+| --- | --- |
+| `TOKEN_EXPIRED` | Access token past its `exp`. |
+| `TOKEN_INVALID` | Bad signature, wrong algorithm, wrong issuer/audience, or malformed. |
+| `REFRESH_TOKEN_INVALID` | No session matches the refresh token. |
+| `REFRESH_TOKEN_EXPIRED` | The session's sliding expiry has passed. |
+| `SESSION_EXPIRED` | The session's absolute lifetime has passed. |
+| `REFRESH_TOKEN_REUSED` | A revoked refresh token was presented; its family is now revoked. |
+| `USER_NOT_FOUND` | The token was valid but the user no longer exists. |
 
 ### Example Error Handling
 
@@ -390,7 +453,11 @@ try {
         res.status(401).json({ error: 'Invalid email or password' });
         break;
       case 'AUTHENTICATION_FAILED':
-        res.status(403).json({ error: 'Session expired or invalidated' });
+        if (error.reason === 'TOKEN_EXPIRED') {
+          res.status(401).json({ error: 'Token expired', refresh: true });
+        } else {
+          res.status(403).json({ error: 'Session expired or invalidated' });
+        }
         break;
       default:
         res.status(500).json({ error: error.message });
@@ -400,6 +467,31 @@ try {
   }
 }
 ```
+
+---
+
+## Password Hashing
+
+Passwords are hashed with bcrypt at cost 10 by default. Raise the cost, or replace bcrypt entirely:
+
+```typescript
+import { createAuth } from '@_bisht_akash/sentra';
+import type { PasswordHasher } from '@_bisht_akash/sentra';
+import argon2 from 'argon2';
+
+const argon2Hasher: PasswordHasher = {
+  hash: (password) => argon2.hash(password),
+  compare: (password, hash) => argon2.verify(hash, password),
+};
+
+const auth = createAuth({
+  // ...
+  bcryptCost: 12,               // tune the default hasher, or
+  passwordHasher: argon2Hasher, // swap it out (bcryptCost is then ignored)
+});
+```
+
+The same hasher is used for the dummy comparison that keeps login timing constant for unknown emails.
 
 ---
 
@@ -420,6 +512,10 @@ Factory function to create a new `Auth` instance.
   - `absoluteSessionExpiry?: string` (Optional) - Hard cap on a login session's total lifetime. Disabled by default. See [Absolute Session Lifetime](#absolute-session-lifetime).
   - `refreshTokenGracePeriod?: string` (Optional) - Window in which a just-rotated refresh token may be presented again without triggering reuse detection. Disabled by default. See [Concurrent Refreshes](#concurrent-refreshes-grace-period).
   - `normalizeEmail?: boolean | ((email: string) => string)` (Optional) - How emails are normalised before lookup and storage. `true` (default) trims and lowercases, `false` uses them verbatim, or supply your own function.
+  - `jwt?: { issuer?: string; audience?: string }` (Optional) - `iss` / `aud` claims to set on access tokens and require when verifying.
+  - `bcryptCost?: number` (Optional) - Work factor for the default bcrypt hasher. Defaults to `10`.
+  - `passwordHasher?: PasswordHasher` (Optional) - Replace bcrypt. See [Password Hashing](#password-hashing).
+  - `logger?: { warn, error }` (Optional) - Destination for hook failures and configuration warnings. Defaults to `console`.
   - `hooks?: AuthHooks` (Optional) - Lifecycle hooks object.
 
 All duration options accept `<number><unit>` with an optional space, where the unit is one of `s`, `m`, `h`, `d`, `w` or their long forms (`"15m"`, `"2 hours"`, `"30 days"`). Invalid values throw from `createAuth` so misconfiguration fails at startup.
@@ -450,11 +546,19 @@ Validates credentials, creates a refresh token family/session, and returns JWT t
 
 #### `authenticate(token)`
 
-Verifies a short-lived access token and retrieves the associated user.
+Verifies a short-lived access token and retrieves the associated user from the database.
 
 - **Parameters**: `token: string` - The access token JWT.
 - **Returns**: `Promise<User>` (`{ id, email }`)
 - **Throws**: `AuthError` (code: `AUTHENTICATION_FAILED`)
+
+#### `verify(token)`
+
+Verifies an access token **without** a database lookup. Faster than `authenticate`, but a deleted user's token stays valid until it expires.
+
+- **Parameters**: `token: string` - The access token JWT.
+- **Returns**: `Promise<{ userId, issuedAt, expiresAt }>`
+- **Throws**: `AuthError` (code: `AUTHENTICATION_FAILED`, reason: `TOKEN_EXPIRED` | `TOKEN_INVALID`)
 
 #### `refresh(refreshToken)`
 
@@ -464,15 +568,41 @@ Validates the refresh token, executes rotation, generates a new token/refresh to
 - **Returns**: `Promise<AuthResult>` (`{ user: { id, email }, token, refreshToken }`)
 - **Throws**: `AuthError` (code: `AUTHENTICATION_FAILED`)
 
+#### `logout(refreshToken)`
+
+Revokes the refresh-token family the token belongs to, ending that login on every client that shares it. Unknown, empty or already-revoked tokens are ignored, so it is safe to call unconditionally on logout.
+
+- **Parameters**: `refreshToken: string`
+- **Returns**: `Promise<void>`
+
+#### `logoutAll(userId)`
+
+Revokes every refresh session of the user. Access tokens already issued remain valid until they expire, so keep `tokenExpiry` short if this matters.
+
+- **Parameters**: `userId: string`
+- **Returns**: `Promise<void>`
+- **Requires**: `refreshTokenAdapter.revokeUserSessions`
+- **Throws**: `AuthError` (code: `INVALID_INPUT`); `Error` if the adapter lacks `revokeUserSessions`
+
+#### `changePassword(userId, data)`
+
+Verifies the current password, stores the new hash, and — when the refresh-token adapter implements `revokeUserSessions` — signs the user out everywhere.
+
+- **Parameters**: `userId: string`, `data: { currentPassword, newPassword }`
+- **Returns**: `Promise<void>`
+- **Requires**: `adapter.updatePassword`
+- **Throws**: `AuthError` (code: `USER_NOT_FOUND` | `INVALID_CREDENTIALS` | `INVALID_INPUT`); `Error` if the adapter lacks `updatePassword`
+
 ## Development
 
 ```bash
-git clone https://github.com/akashbisht004/Sentra.git
+git clone https://github.com/SentralLabs/Sentra.git
 cd Sentra
 npm install
+npm run typecheck # tsc over src, tests and examples
 npm test          # run the test suite once
 npm run test:watch
-npm run build     # emit dist/ via tsup
+npm run build     # emit dist/ (ESM + CJS + types) via tsup
 ```
 
 CI runs the test suite and build on every push and pull request to `main`. See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines and [SECURITY.md](.github/SECURITY.md) for reporting vulnerabilities.

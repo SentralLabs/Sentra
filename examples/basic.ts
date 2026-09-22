@@ -1,5 +1,5 @@
 import {createAuth} from "../src/index.js";
-import { MemoryAdapter } from "./memory-adapter.js";
+import { MemoryAdapter } from "../src/index.js";
 
 const adapter = new MemoryAdapter();
 
