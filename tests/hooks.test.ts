@@ -155,7 +155,7 @@ describe("beforeRefresh / afterRefresh", () => {
         const login = await auth.login({ email: "akash@gmail.com", password: "akash" });
         await auth.refresh(login.refreshToken);
 
-        const expected = { id: user.id, email: "akash@gmail.com" };
+        const expected = { id: user.id, email: "akash@gmail.com", emailVerifiedAt: null };
         expect(beforeRefresh).toHaveBeenCalledWith(expected);
         expect(afterRefresh).toHaveBeenCalledWith(expected);
     });

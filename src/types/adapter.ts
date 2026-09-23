@@ -3,6 +3,11 @@ import { RefreshSession } from "./session.js";
 export interface User {
     id: string;
     email: string;
+    /**
+     * `undefined` when the adapter does not track verification, `null`
+     * when the email has not been verified, otherwise when it was.
+     */
+    emailVerifiedAt?: Date | null;
 }
 export interface UserRecord extends User {
     passwordHash: string;
@@ -16,8 +21,10 @@ export interface UserAdapter {
     findUserByEmail(email: string): Promise<UserRecord | null>;
     createUser(data: CreateUser): Promise<UserRecord>;
     findUserById(userId: string): Promise<UserRecord | null>;
-    /** Required for `auth.changePassword`. */
+    /** Required for `auth.changePassword` and `auth.resetPassword`. */
     updatePassword?(userId: string, passwordHash: string): Promise<void>;
+    /** Required for `auth.verifyEmail`. */
+    setEmailVerified?(userId: string, verifiedAt: Date): Promise<void>;
 }
 
 export interface RefreshTokenAdapter {

@@ -112,3 +112,19 @@ describe("createAuth config validation", () => {
     });
 
 });
+
+describe("createAuth 1.2.0 options", () => {
+
+    it("should reject an invalid passwordResetExpiry at startup", () => {
+        expect(() =>
+            createAuth({ ...base(), passwordResetExpiry: "soon" })
+        ).toThrow(/passwordResetExpiry/);
+    });
+
+    it("should reject an invalid emailVerificationExpiry at startup", () => {
+        expect(() =>
+            createAuth({ ...base(), emailVerificationExpiry: "24" })
+        ).toThrow(/emailVerificationExpiry/);
+    });
+
+});

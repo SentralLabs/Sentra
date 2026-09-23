@@ -43,6 +43,10 @@ Password Hashing   JWT Token Mgmt     Session & Token Rotation
 - [Refresh-Token Architecture](#refresh-token-architecture)
   - [How Token Rotation Works](#how-token-rotation-works)
   - [Automatic Reuse Detection](#automatic-reuse-detection)
+- [Password Reset & Email Verification](#password-reset--email-verification)
+  - [Password Reset](#password-reset)
+  - [Email Verification](#email-verification)
+  - [How Action Tokens Work](#how-action-tokens-work)
 - [Hooks](#hooks)
 - [Errors](#errors)
 - [Password Hashing](#password-hashing)
@@ -138,6 +142,8 @@ Handles operations related to the user accounts.
 export interface User {
   id: string;
   email: string;
+  // undefined: adapter does not track it · null: not verified · Date: verified
+  emailVerifiedAt?: Date | null;
 }
 
 export interface UserRecord extends User {
@@ -153,8 +159,10 @@ export interface UserAdapter {
   findUserByEmail(email: string): Promise<UserRecord | null>;
   findUserById(userId: string): Promise<UserRecord | null>;
   createUser(data: CreateUser): Promise<UserRecord>;
-  // Optional — required for `auth.changePassword()`
+  // Optional — required for `auth.changePassword()` and `auth.resetPassword()`
   updatePassword?(userId: string, passwordHash: string): Promise<void>;
+  // Optional — required for `auth.verifyEmail()`
+  setEmailVerified?(userId: string, verifiedAt: Date): Promise<void>;
 }
 ```
 
@@ -196,10 +204,11 @@ Here is a full example of implementing both interfaces using **Prisma ORM**:
 
 ```prisma
 model User {
-  id           String           @id @default(uuid())
-  email        String           @unique
-  passwordHash String
-  sessions     RefreshSession[]
+  id              String           @id @default(uuid())
+  email           String           @unique
+  passwordHash    String
+  emailVerifiedAt DateTime?        // optional: needed for email verification
+  sessions        RefreshSession[]
 }
 
 model RefreshSession {
@@ -250,9 +259,14 @@ export class SentraDbAdapter implements UserAdapter, RefreshTokenAdapter {
     });
   }
 
-  // Optional: needed for `auth.changePassword()`
+  // Optional: needed for `auth.changePassword()` and `auth.resetPassword()`
   async updatePassword(userId: string, passwordHash: string): Promise<void> {
     await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  }
+
+  // Optional: needed for `auth.verifyEmail()`
+  async setEmailVerified(userId: string, verifiedAt: Date): Promise<void> {
+    await prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: verifiedAt } });
   }
 
   // --- RefreshTokenAdapter Implementation ---
@@ -351,6 +365,77 @@ When enabled, each session carries an `absoluteExpiresAt` that is copied unchang
 
 ---
 
+## Password Reset & Email Verification
+
+Both flows follow the same shape: Sentra mints a short-lived token and hands it to a `send*` hook you provide (Sentra never sends email); your app puts it in a link; the user brings it back. Nothing is stored — see [How Action Tokens Work](#how-action-tokens-work).
+
+### Password Reset
+
+```typescript
+const auth = createAuth({
+  // ...
+  passwordResetExpiry: '1h', // default
+  hooks: {
+    sendPasswordReset: async ({ user, token, expiresAt }) => {
+      await mailer.send(user.email, `https://app.example.com/reset?token=${token}`);
+    },
+    afterPasswordReset: async (user) => {
+      await notify(user.email, 'Your password was changed');
+    },
+  },
+});
+
+// "Forgot password" form — always resolves, so it cannot be used to
+// check whether an email is registered.
+await auth.requestPasswordReset(email);
+
+// Reset form — signs the user out everywhere when the adapter supports it.
+await auth.resetPassword(token, newPassword);
+```
+
+The token is bound to the user's current password hash, so it is single-use: once the password changes — through `resetPassword` or `changePassword` — every outstanding reset link stops working. Requires `updatePassword` on your adapter.
+
+### Email Verification
+
+```typescript
+const auth = createAuth({
+  // ...
+  emailVerificationExpiry: '24h',  // default
+  requireEmailVerification: true,  // default false
+  hooks: {
+    sendEmailVerification: async ({ user, token }) => {
+      await mailer.send(user.email, `https://app.example.com/verify?token=${token}`);
+    },
+    afterEmailVerified: async (user) => { /* ... */ },
+  },
+});
+
+// signUp() sends the link automatically when the hook is configured.
+// A delivery failure is logged, not thrown — the account already exists.
+await auth.signUp({ email, password });
+
+// "Resend" button — a no-op for unknown or already-verified emails.
+await auth.requestEmailVerification(email);
+
+// Link handler — idempotent; clicking twice is fine.
+const user = await auth.verifyEmail(token);
+```
+
+With `requireEmailVerification: true`, `login` throws `EMAIL_NOT_VERIFIED` for unverified users. The check runs **after** the password is verified, so verification status is never revealed to someone who only knows the email, and it does not fire `onLoginFailed`. It applies to `login` only — turning it on does not invalidate existing sessions. Requires `emailVerifiedAt` on user records and `setEmailVerified` on your adapter.
+
+### How Action Tokens Work
+
+Reset and verification tokens are HS256 JWTs signed with a key derived from your secret **and the state the action changes**:
+
+| Purpose | Key includes | So the token dies when… |
+| --- | --- | --- |
+| `password-reset` | current `passwordHash` | the password changes |
+| `email-verification` | current `email` | the email address changes |
+
+This gives single-use semantics without a token table or cleanup job. The trade-off is that a link cannot be revoked early other than by changing the underlying state, so keep expiries short. Tokens carry a `purpose` claim and a dedicated `typ` header, are verified with the algorithm pinned, and can never be confused with access tokens (different key) or with each other.
+
+---
+
 ## Hooks
 
 You can define optional lifecycle hooks to execute side effects during key events. Hooks may be synchronous or return a promise:
@@ -369,10 +454,20 @@ export interface AuthHooks {
   onReuseDetected?: (data: { userId: string; familyId: string; sessionId: string }) => void | Promise<void>;
 
   afterPasswordChange?: (user: User) => void | Promise<void>;
+
+  sendPasswordReset?: (data: { user: User; token: string; expiresAt: Date }) => void | Promise<void>;
+  afterPasswordReset?: (user: User) => void | Promise<void>;
+
+  sendEmailVerification?: (data: { user: User; token: string; expiresAt: Date }) => void | Promise<void>;
+  afterEmailVerified?: (user: User) => void | Promise<void>;
 }
 ```
 
-`before*` hooks run before the operation and abort it by throwing. `after*` and `on*` hooks are for side effects: if they throw, the error is passed to the configured `logger` and the operation's result is still returned.
+Three kinds of hook:
+
+- `before*` run before the operation and abort it by throwing.
+- `after*` / `on*` are for side effects: if they throw, the error is passed to the configured `logger` and the operation's result is still returned.
+- `send*` deliver a token to the user. If they throw, the error propagates so the caller knows delivery failed (except inside `signUp`, where a failed verification email is logged so the signup itself still succeeds).
 
 ### Example Usage
 
@@ -423,11 +518,13 @@ Sentra throws a custom `AuthError` containing a descriptive error message and an
 - `USER_NOT_FOUND`: Thrown by `changePassword` when the user id does not exist.
 - `INVALID_CREDENTIALS`: Thrown during login or `changePassword` if the email is not found or the password comparison fails. Deliberately does not say which.
 - `INVALID_INPUT`: Thrown when a required string (email, password, token, user id) is missing or empty.
+- `INVALID_TOKEN`: Thrown by `resetPassword` and `verifyEmail` for a bad or expired link. Carries a `reason` (below) so you can offer "request a new link" on expiry.
+- `EMAIL_NOT_VERIFIED`: Thrown by `login` when `requireEmailVerification` is on and the user has not verified their email.
 - `AUTHENTICATION_FAILED`: Thrown during token validation or refresh flow (e.g. invalid tokens, expired tokens, or token reuse detection).
 
 ### Error Reasons
 
-`AUTHENTICATION_FAILED` errors also carry a `reason` so you can distinguish a token that simply expired (ask the client to refresh) from one that was tampered with or replayed (log the client out):
+`AUTHENTICATION_FAILED` and `INVALID_TOKEN` errors also carry a `reason` so you can distinguish a token that simply expired (ask the client to refresh, or offer a new link) from one that was tampered with or replayed (log the client out):
 
 | `reason` | Meaning |
 | --- | --- |
@@ -438,6 +535,10 @@ Sentra throws a custom `AuthError` containing a descriptive error message and an
 | `SESSION_EXPIRED` | The session's absolute lifetime has passed. |
 | `REFRESH_TOKEN_REUSED` | A revoked refresh token was presented; its family is now revoked. |
 | `USER_NOT_FOUND` | The token was valid but the user no longer exists. |
+| `RESET_TOKEN_EXPIRED` | Password-reset link past its expiry. |
+| `RESET_TOKEN_INVALID` | Password-reset link malformed, tampered, already used, or for a deleted user. |
+| `VERIFICATION_TOKEN_EXPIRED` | Verification link past its expiry. |
+| `VERIFICATION_TOKEN_INVALID` | Verification link malformed, tampered, for a changed email, or for a deleted user. |
 
 ### Example Error Handling
 
@@ -512,6 +613,9 @@ Factory function to create a new `Auth` instance.
   - `absoluteSessionExpiry?: string` (Optional) - Hard cap on a login session's total lifetime. Disabled by default. See [Absolute Session Lifetime](#absolute-session-lifetime).
   - `refreshTokenGracePeriod?: string` (Optional) - Window in which a just-rotated refresh token may be presented again without triggering reuse detection. Disabled by default. See [Concurrent Refreshes](#concurrent-refreshes-grace-period).
   - `normalizeEmail?: boolean | ((email: string) => string)` (Optional) - How emails are normalised before lookup and storage. `true` (default) trims and lowercases, `false` uses them verbatim, or supply your own function.
+  - `passwordResetExpiry?: string` (Optional) - Lifetime of password-reset links. Defaults to `"1h"`.
+  - `emailVerificationExpiry?: string` (Optional) - Lifetime of email-verification links. Defaults to `"24h"`.
+  - `requireEmailVerification?: boolean` (Optional) - Reject `login` for unverified users with `EMAIL_NOT_VERIFIED`. Defaults to `false`.
   - `jwt?: { issuer?: string; audience?: string }` (Optional) - `iss` / `aud` claims to set on access tokens and require when verifying.
   - `bcryptCost?: number` (Optional) - Work factor for the default bcrypt hasher. Defaults to `10`.
   - `passwordHasher?: PasswordHasher` (Optional) - Replace bcrypt. See [Password Hashing](#password-hashing).
@@ -592,6 +696,42 @@ Verifies the current password, stores the new hash, and — when the refresh-tok
 - **Returns**: `Promise<void>`
 - **Requires**: `adapter.updatePassword`
 - **Throws**: `AuthError` (code: `USER_NOT_FOUND` | `INVALID_CREDENTIALS` | `INVALID_INPUT`); `Error` if the adapter lacks `updatePassword`
+
+#### `requestPasswordReset(email)`
+
+Mints a reset token and passes `{ user, token, expiresAt }` to the `sendPasswordReset` hook. Resolves without doing anything for unknown emails.
+
+- **Parameters**: `email: string`
+- **Returns**: `Promise<void>`
+- **Requires**: `hooks.sendPasswordReset`
+- **Throws**: `AuthError` (code: `INVALID_INPUT`); whatever the hook throws; `Error` if the hook is not configured
+
+#### `resetPassword(token, newPassword)`
+
+Verifies the reset token, stores the new hash, and — when the refresh-token adapter implements `revokeUserSessions` — signs the user out everywhere. The token is single-use.
+
+- **Parameters**: `token: string`, `newPassword: string`
+- **Returns**: `Promise<void>`
+- **Requires**: `adapter.updatePassword`
+- **Throws**: `AuthError` (code: `INVALID_TOKEN` with reason `RESET_TOKEN_EXPIRED` | `RESET_TOKEN_INVALID`, or `INVALID_INPUT`); `Error` if the adapter lacks `updatePassword`
+
+#### `requestEmailVerification(email)`
+
+Re-sends a verification token via the `sendEmailVerification` hook. A no-op for unknown or already-verified emails. (`signUp` sends the first one automatically.)
+
+- **Parameters**: `email: string`
+- **Returns**: `Promise<void>`
+- **Requires**: `hooks.sendEmailVerification`
+- **Throws**: `AuthError` (code: `INVALID_INPUT`); whatever the hook throws; `Error` if the hook is not configured
+
+#### `verifyEmail(token)`
+
+Marks the user's email verified and returns the user. Idempotent for already-verified users.
+
+- **Parameters**: `token: string`
+- **Returns**: `Promise<User>`
+- **Requires**: `adapter.setEmailVerified`
+- **Throws**: `AuthError` (code: `INVALID_TOKEN` with reason `VERIFICATION_TOKEN_EXPIRED` | `VERIFICATION_TOKEN_INVALID`, or `INVALID_INPUT`); `Error` if the adapter lacks `setEmailVerified`
 
 ## Development
 

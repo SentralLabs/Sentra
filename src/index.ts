@@ -40,6 +40,11 @@ function createAuth(config: AuthConfig): Auth {
         ? 0
         : parseDurationOption("refreshTokenGracePeriod", config.refreshTokenGracePeriod);
 
+    const passwordResetExpiry = config.passwordResetExpiry ?? "1h";
+    parseDurationOption("passwordResetExpiry", passwordResetExpiry);
+    const emailVerificationExpiry = config.emailVerificationExpiry ?? "24h";
+    parseDurationOption("emailVerificationExpiry", emailVerificationExpiry);
+
     if (refreshTokenGracePeriodMs > 0 && typeof config.refreshTokenAdapter.findSessionsByFamilyId !== "function") {
         throw new Error("Sentra: refreshTokenGracePeriod requires refreshTokenAdapter.findSessionsByFamilyId");
     }
@@ -57,6 +62,9 @@ function createAuth(config: AuthConfig): Auth {
         absoluteSessionExpiryMs,
         refreshTokenGracePeriodMs,
         normalizeEmail: config.normalizeEmail ?? true,
+        passwordResetExpiry,
+        emailVerificationExpiry,
+        requireEmailVerification: config.requireEmailVerification ?? false,
         jwt: config.jwt ?? {},
         passwordHasher: config.passwordHasher ?? createBcryptHasher(config.bcryptCost ?? DEFAULT_BCRYPT_COST),
         logger,
@@ -71,6 +79,7 @@ export type { AuthErrorCode, AuthErrorReason, AuthErrorOptions } from "./errors/
 export type { AuthConfig, SignUpData, LoginData, ChangePasswordData, AuthResult, Logger } from "./types/auth.js";
 export type { User, UserRecord, CreateUser, UserAdapter, RefreshTokenAdapter } from "./types/adapter.js";
 export type { RefreshSession } from "./types/session.js";
-export type { AuthHooks, SignUpHookData, LoginFailedHookData, ReuseDetectedHookData } from "./types/hooks.js";
+export type { AuthHooks, SignUpHookData, LoginFailedHookData, ReuseDetectedHookData, DeliveryHookData } from "./types/hooks.js";
+export type { ActionTokenPayload, ActionTokenPurpose } from "./jwt/action-token.js";
 export type { PasswordHasher } from "./password/hasher.js";
 export type { JwtOptions, TokenPayload } from "./jwt/token.js";

@@ -42,7 +42,8 @@ export class MemoryAdapter implements UserAdapter, RefreshTokenAdapter {
         const user: UserRecord = {
             id: randomBytes(8).toString("hex"),
             email: data.email,
-            passwordHash: data.passwordHash
+            passwordHash: data.passwordHash,
+            emailVerifiedAt: null
         };
         this.db.push(user);
         return user;
@@ -51,6 +52,17 @@ export class MemoryAdapter implements UserAdapter, RefreshTokenAdapter {
     async updatePassword(userId: string, passwordHash: string): Promise<void> {
         const user = this.db.find(user => user.id === userId);
         if (user) user.passwordHash = passwordHash;
+    }
+
+    async setEmailVerified(userId: string, verifiedAt: Date): Promise<void> {
+        const user = this.db.find(user => user.id === userId);
+        if (user) user.emailVerifiedAt = verifiedAt;
+    }
+
+    /** Test helper: change a user's email directly. */
+    setEmail(userId: string, email: string): void {
+        const user = this.db.find(user => user.id === userId);
+        if (user) user.email = email;
     }
 
     // --- RefreshTokenAdapter ---
