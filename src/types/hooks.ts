@@ -18,10 +18,19 @@ export interface ReuseDetectedHookData {
     sessionId: string;
 }
 
+export interface DeliveryHookData {
+    user: User;
+    /** Put this in the link you email; Sentra never sends email itself. */
+    token: string;
+    expiresAt: Date;
+}
+
 /**
  * `before*` hooks run before the operation and abort it by throwing.
  * `after*` and `on*` hooks run for side effects; if they throw, the error
  * is logged and the operation's result is still returned.
+ * `send*` hooks deliver a token to the user; if they throw, the error
+ * propagates so the caller knows delivery failed.
  */
 export interface AuthHooks {
     beforeSignUp?: Hook<SignUpHookData>;
@@ -39,4 +48,15 @@ export interface AuthHooks {
     onReuseDetected?: Hook<ReuseDetectedHookData>;
 
     afterPasswordChange?: Hook<User>;
+
+    /** Deliver a password-reset link. Required for `auth.requestPasswordReset`. */
+    sendPasswordReset?: Hook<DeliveryHookData>;
+    afterPasswordReset?: Hook<User>;
+
+    /**
+     * Deliver an email-verification link. Required for
+     * `auth.requestEmailVerification`; when set, `auth.signUp` also calls it.
+     */
+    sendEmailVerification?: Hook<DeliveryHookData>;
+    afterEmailVerified?: Hook<User>;
 }

@@ -284,7 +284,8 @@ describe("Login", () => {
 
         expect(beforeLogin).toHaveBeenCalledWith({
             id: expect.any(String),
-            email: "akash@gmail.com"
+            email: "akash@gmail.com",
+            emailVerifiedAt: null
         });
     });
 

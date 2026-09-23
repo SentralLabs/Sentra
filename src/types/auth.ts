@@ -34,6 +34,16 @@ export interface AuthConfig{
      * supplies custom normalisation.
      */
     normalizeEmail?: boolean | ((email: string) => string);
+    /** Lifetime of password-reset tokens. Defaults to "1h". */
+    passwordResetExpiry?: string;
+    /** Lifetime of email-verification tokens. Defaults to "24h". */
+    emailVerificationExpiry?: string;
+    /**
+     * Reject `login` for users whose email is not verified. Checked after
+     * the password so unverified status is not revealed without it.
+     * Defaults to false.
+     */
+    requireEmailVerification?: boolean;
     /** `iss` / `aud` claims to set on access tokens and require when verifying. */
     jwt?: JwtOptions;
     /** bcrypt work factor for the default hasher. Defaults to 10. Ignored when `passwordHasher` is set. */

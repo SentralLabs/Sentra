@@ -259,7 +259,7 @@ describe("changePassword", () => {
 
         await auth.changePassword(user.id, { currentPassword: "akash", newPassword: "new-password" });
 
-        expect(afterPasswordChange).toHaveBeenCalledWith({ id: user.id, email: "akash@gmail.com" });
+        expect(afterPasswordChange).toHaveBeenCalledWith({ id: user.id, email: "akash@gmail.com", emailVerifiedAt: null });
     });
 
 });

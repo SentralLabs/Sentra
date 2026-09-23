@@ -4,6 +4,19 @@ All notable changes to Sentra will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and Sentra follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-23
+
+### Added
+
+* Password reset: `auth.requestPasswordReset(email)` hands a token to the new `sendPasswordReset` hook; `auth.resetPassword(token, newPassword)` completes it and signs the user out everywhere when the adapter supports it. Tokens are bound to the current password hash, so they are single-use with nothing stored.
+* Email verification: `auth.signUp` sends a token via the new `sendEmailVerification` hook when configured; `auth.requestEmailVerification(email)` re-sends; `auth.verifyEmail(token)` marks the address verified. Requires the new optional `setEmailVerified` adapter method and an `emailVerifiedAt` field on user records.
+* `requireEmailVerification` option: `login` rejects unverified users with the new `EMAIL_NOT_VERIFIED` code, checked after the password so status is not leaked.
+* `passwordResetExpiry` (default `"1h"`) and `emailVerificationExpiry` (default `"24h"`) options.
+* `User.emailVerifiedAt` is mirrored from the adapter when present.
+* Hooks `afterPasswordReset` and `afterEmailVerified`.
+* New error code `INVALID_TOKEN` with reasons `RESET_TOKEN_INVALID`, `RESET_TOKEN_EXPIRED`, `VERIFICATION_TOKEN_INVALID`, `VERIFICATION_TOKEN_EXPIRED`.
+* Exported types `DeliveryHookData`, `ActionTokenPayload`, `ActionTokenPurpose`.
+
 ## [1.1.0] - 2026-09-22
 
 ### Added
@@ -72,6 +85,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Reuse of revoked refresh tokens is detected.
 * Refresh-token families can be revoked after token reuse detection.
 
+[1.2.0]: https://github.com/SentralLabs/Sentra/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/SentralLabs/Sentra/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/SentralLabs/Sentra/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/SentralLabs/Sentra/releases/tag/v1.0.0
